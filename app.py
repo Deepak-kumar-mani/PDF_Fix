@@ -1,3 +1,5 @@
+import shutil
+
 from flask import Flask, render_template, request, send_file, redirect, url_for, jsonify
 import os
 import fitz  # PyMuPDF
