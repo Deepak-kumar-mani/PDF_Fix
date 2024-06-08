@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Display PDF</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <script src="{{ url_for('static', filename='js/form_validation.js') }}"></script>
+    <style>
+        #pdf-container {
+            display: flex;
+        }
+        #pdf-iframe {
+            width: 800px;
+            height: 600px;
+            overflow: scroll;
+        }
+        .page-controls {
+            margin-left: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        #crop-container {
+            max-width: 800px;
+            max-height: 600px;
+            overflow: hidden;
+        }
+        #crop-image {
+            max-width: 100%;
+        }
+        #crop-modal, #message-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 20px;
+            border: 2px solid #ccc;
+            z-index: 1000;
+        }
+        #crop-modal img {
+            max-width: 100%;
+        }
+        #submit-container {
+            margin-top: 20px;
+        }
+        #upload-another {
+            margin-top: 20px;
+        }
+        #warning-message {
+            color: red;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h2>Uploaded PDF</h2>
+    <div id="pdf-container">
+        <iframe id="pdf-iframe" src="{{ url_for('send_uploaded_file', filename=filename) }}"></iframe>
+        <div class="page-controls">
+            <form id="review-form" action="/display/{{ filename }}/{{ num_pages }}" method="post">
+                {% for i in range(1, num_pages + 1) %}
+                    <div>
+                        <label for="page-ok-{{ i }}">Page {{ i }} is OK</label>
+                        <input type="radio" id="page-ok-{{ i }}" name="page-{{ i }}" value="ok" onclick="handleOkSelection()">
+                        <label for="page-not-ok-{{ i }}">Not OK</label>
+                        <input type="radio" id="page-not-ok-{{ i }}" name="page-{{ i }}" value="not-ok" onclick="handleNotOkSelection()">
+                        <button type="button" id="crop-button-{{ i }}" onclick="openCropModal('{{ filename }}', {{ i }})">Crop Page {{ i }}</button>
+                    </div>
+                {% endfor %}
+                <div id="submit-container">
+                    <input type="submit" id="submit-button" value="Submit" disabled>
+                    <div id="warning-message">Ensure all the pages are selected with appropriate action and crop the proper signature.</div>
+                </div>
+            </form>
+            <div id="upload-another">
+                <a href="/">Upload Another PDF</a>
+            </div>
+        </div>
+    </div>
+    <br><br>
+
+    <div id="crop-modal">
+        <div id="crop-container">
+            <img id="crop-image" src="">
+        </div>
+        <button type="button" onclick="cropPage()">Crop</button>
+        <button type="button" onclick="closeCropModal()">Cancel</button>
+    </div>
+
+    <div id="message-modal">
+        <p>Select the correct signature to merge into the NOT OK page.</p>
+        <button type="button" onclick="closeMessageModal()">OK</button>
+    </div>
+
+    <div id="crop-preview"></div>
+
+    <script>
+        let cropper;
+        let cropFilename;
+        let cropPageNumber;
+        let messageShown = false;
+        let cropCompleted = false;
+
+        function handleOkSelection() {
+            notOkSelected = false;
+            checkFormCompletion();
+        }
+
+        function handleNotOkSelection() {
+            notOkSelected = true;
+            showMessageModal();
+            checkFormCompletion();
+        }
+
+        function showMessageModal() {
+            if (!messageShown) {
+                document.getElementById('message-modal').style.display = 'block';
+                messageShown = true;
+            }
+        }
+
+        function closeMessageModal() {
+            document.getElementById('message-modal').style.display = 'none';
+        }
+
+        function openCropModal(filename, pageNumber) {
+            cropFilename = filename;
+            cropPageNumber = pageNumber;
+
+            fetch('/get_page_image', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: cropFilename,
+                    page_number: cropPageNumber,
+                }),
+            })
+            .then(response => response.text())
+            .then(data => {
+                const imageSrc = 'data:image/png;base64,' + data;
+                document.getElementById('crop-image').src = imageSrc;
+                document.getElementById('crop-modal').style.display = 'block';
+
+                cropper = new Cropper(document.getElementById('crop-image'), {
+                    aspectRatio: NaN,
+                    viewMode: 2,
+                    movable: true,
+                    zoomable: true,
+                    rotatable: true,
+                    scalable: true,
+                });
+            });
+        }
+
+        function closeCropModal() {
+            cropper.destroy();
+            document.getElementById('crop-modal').style.display = 'none';
+        }
+
+        function cropPage() {
+            const cropData = cropper.getData();
+            fetch('/crop', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: cropFilename,
+                    page_number: cropPageNumber,
+                    x: cropData.x,
+                    y: cropData.y,
+                    width: cropData.width,
+                    height: cropData.height,
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                const img = document.createElement('img');
+                img.src = 'data:image/png;base64,' + data.cropped_image;
+                document.getElementById('crop-preview').appendChild(img);
+                cropCompleted = true;
+                closeCropModal();
+                checkFormCompletion();
+            });
+        }
+
+        function checkFormCompletion() {
+            const form = document.getElementById('review-form');
+            const radioGroups = form.querySelectorAll('input[type="radio"]');
+            const submitButton = document.getElementById('submit-button');
+            const warningMessage = document.getElementById('warning-message');
+
+            const groups = {};
+            radioGroups.forEach(function(radio) {
+                const name = radio.name;
+                if (!groups[name]) {
+                    groups[name] = false;
+                }
+                if (radio.checked) {
+                    groups[name] = true;
+                }
+            });
+
+            const allSelected = Object.values(groups).every(selected => selected);
+            const allOk = ![...document.querySelectorAll('input[type="radio"][value="not-ok"]:checked')].length;
+
+            if (allSelected && (allOk || cropCompleted)) {
+                submitButton.disabled = false;
+                warningMessage.style.display = 'none';
+            } else {
+                submitButton.disabled = true;
+                warningMessage.style.display = 'block';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const pdfContainer = document.getElementById('pdf-iframe');
+            const loadingTask = pdfjsLib.getDocument('/uploads/{{ filename }}');
+            loadingTask.promise.then(function(pdf) {
+                for (let i = 1; i <= pdf.numPages; i++) {
+                    const canvas = document.createElement('canvas');
+                    canvas.className = 'pdf-page';
+                    pdfContainer.appendChild(canvas);
+                    renderPDFPage(i, canvas);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
